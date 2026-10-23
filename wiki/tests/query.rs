@@ -716,6 +716,72 @@ fn whole_name_outranks_an_earlier_word_match() {
     );
 }
 
+/// A C++ header declaring `onOrderReject` (no doc), a test file that mocks
+/// it and names a test after it, a dispatch site and a docs spec. Before
+/// test-only names left `defined_terms`, the test page ranked first.
+fn fsm_fixture() -> (tempfile::TempDir, Wiki) {
+    code_fixture(&[
+        (
+            "src/core_strategy_fsm.h",
+            "#pragma once\n/// Strategy state machine.\nclass StrategyFsm {\npublic:\n    void onOrderReject(int code);\n    void onFill(int qty);\n};\n",
+        ),
+        (
+            "tests/test_fsm.cpp",
+            "#include \"../src/core_strategy_fsm.h\"\nclass MockFsm : public StrategyFsm {\npublic:\n    void onOrderReject(int code) { rejects++; }\n    int rejects = 0;\n};\nvoid test_order_reject_counts() {\n    MockFsm m;\n    m.onOrderReject(1);\n    m.onOrderReject(2);\n}\n",
+        ),
+        (
+            "src/dispatch.cpp",
+            "#include \"core_strategy_fsm.h\"\nvoid dispatch(StrategyFsm& f, int ev) {\n    if (ev == 3) f.onOrderReject(ev);\n}\n",
+        ),
+        (
+            "docs/spec.md",
+            "# Fsm spec\n\nAn order reject halts the strategy until the next order.\n",
+        ),
+    ])
+}
+
+#[test]
+fn test_only_names_do_not_lift_a_cpp_test_page() {
+    let (_d, w) = fsm_fixture();
+    let hits = w.search("order reject", None, 10);
+    let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+    let rank = |id: &str| ids.iter().position(|i| *i == id);
+    let (def, test) = (rank("core_strategy_fsm"), rank("test_fsm"));
+    assert!(def.is_some() && test.is_some() && def < test, "{ids:?}");
+    let lines = symbol_lines(&hits);
+    assert_eq!(
+        lines.first(),
+        Some(&(
+            "src/core_strategy_fsm.h".to_string(),
+            5,
+            5,
+            "StrategyFsm::onOrderReject".to_string()
+        )),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn owner_qualified_token_finds_the_method() {
+    let (_d, w) = fsm_fixture();
+    let lines = symbol_lines(&w.search("StrategyFsm::onOrderReject", None, 10));
+    assert_eq!(
+        lines.first(),
+        Some(&(
+            "src/core_strategy_fsm.h".to_string(),
+            5,
+            5,
+            "StrategyFsm::onOrderReject".to_string()
+        )),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn search_lines_says_no_matches_when_empty() {
+    assert_eq!(wiki::serve::search_lines(&[]), "no matches\n");
+}
+
 #[test]
 fn snippet_drops_comment_markers() {
     let dir = tempdir().unwrap();
