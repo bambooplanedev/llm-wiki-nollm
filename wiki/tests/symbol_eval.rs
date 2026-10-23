@@ -11,6 +11,8 @@
 //! copied from: a score change would no longer be attributable to the scorer,
 //! because the corpus could have moved instead. It is re-cut only by explicit
 //! decision, in a commit that quotes both the old and the new table.
+//! Re-cut 2026-10-23: two test fixtures' text made English (`extract_python.rs`,
+//! `rewrite.rs`), line counts kept; the table did not change.
 //!
 //! **Held-out rule:** every third case in each class is `held_out`. Held-out
 //! cases are never used to choose constants (ranking weights, thresholds);
@@ -40,7 +42,7 @@ use wiki::serve::{search_json, search_lines, DEFAULT_NEIGHBORS_MAX_TOKENS, DEFAU
 mod corpus;
 
 /// Content hash pinning the frozen corpus (see `common/corpus.rs`).
-const SYMBOL_CORPUS_HASH: &str = "60e0653c8eb2b8baec3a8b34e79c68284cf8430e97f115223e7724a009d9ebf8";
+const SYMBOL_CORPUS_HASH: &str = "e3637a4e66af876b1cd3755477d96e84b03b2854f620a6d7038c0c64b05259e8";
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Class {
