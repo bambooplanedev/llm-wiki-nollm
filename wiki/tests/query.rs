@@ -627,9 +627,82 @@ fn a_query_naming_an_identifier_ranks_its_definer_over_mentions() {
         ("py/store.py", "def get_item(sku):\n    return sku\n"),
         ("py/cart.py", "def total(items):\n    return 0\n"),
     ]);
-    let hits = w.search("Which functions call normalize_sku directly?", None, 10);
+    let q = "Which functions call normalize_sku directly?";
+    let hits = w.search(q, None, 10);
     let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
     assert_eq!(ids[0], "sku", "{ids:?}");
+    // The hint keeps pages scoring at least half the best: the definer must pass.
+    let hint = wiki::hint::hint_lines(&w, q);
+    let first = hint.lines().nth(1).unwrap_or_default();
+    assert!(first.starts_with("py/sku.py:"), "{hint}");
+}
+
+#[test]
+fn a_name_many_files_define_does_not_push_out_the_answer() {
+    // Six classes define `get_item`; only `checkout.py` answers the question.
+    let repo = |i: usize| {
+        format!("class Repo{i}:\n    def get_item(self, sku):\n        \"\"\"Fetch an item by SKU from store {i}.\"\"\"\n        return None\n")
+    };
+    let repos: Vec<(String, String)> = (1..=6)
+        .map(|i| (format!("src/repo{i}.py"), repo(i)))
+        .collect();
+    let mut files: Vec<(&str, &str)> = repos
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_str()))
+        .collect();
+    files.push((
+        "src/checkout.py",
+        "def checkout(cart):\n    \"\"\"Checkout returns None when get_item misses a SKU, so the order is dropped.\"\"\"\n    return None\n",
+    ));
+    let (_d, w) = code_fixture(&files);
+    let hits = w.search(
+        "Why does checkout return None for a missing SKU in get_item?",
+        None,
+        5,
+    );
+    assert_eq!(
+        hits[0].id,
+        "checkout",
+        "{:?}",
+        hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_file_named_after_its_function_reaches_the_hint() {
+    let caller = |f: &str| {
+        format!("import {{ formatPrice }} from \"./formatPrice\";\nexport function {f}(c: number): string {{\n  return formatPrice(c);\n}}\n")
+    };
+    let (_d, w) = code_fixture(&[
+        ("src/formatPrice.ts", "/** Price as text, e.g. 12.50 EUR. */\nexport function formatPrice(cents: number): string {\n  return String(cents);\n}\n"),
+        ("src/legacy.ts", "/** Does NOT call formatPrice (labels are raw). */\nexport function legacyLabel(c: number): string {\n  return String(c);\n}\n"),
+        ("src/cart.ts", &caller("cartLine")),
+        ("src/invoice.ts", &caller("invoiceRow")),
+        ("src/mail.ts", &caller("mailLine")),
+        ("src/store.ts", "export function getItem(sku: string): string {\n  return sku;\n}\n"),
+        ("src/total.ts", "export function total(items: number[]): number {\n  return 0;\n}\n"),
+        ("src/log.ts", "export function logLine(s: string): void {}\n"),
+    ]);
+    // `legacy.ts` also matches the rare `call`, so the two may swap in
+    // `search`; the definer must still reach the hint (half the best score).
+    let hint = wiki::hint::hint_lines(&w, "Which functions call formatPrice directly?");
+    assert!(hint.contains("\nsrc/formatPrice.ts:"), "{hint}");
+}
+
+#[test]
+fn a_hyphenated_english_word_is_not_an_identifier() {
+    // `read-only` names a shell function, but the question is about the notes.
+    let (_d, w) = code_fixture(&[
+        ("tools.sh", "read-only() {\n  mount -o ro \"$1\"\n}\n"),
+        ("cache.sh", "# The cache is mounted read-only so builds cannot write to it.\nmount_cache() {\n  mount -o ro /cache\n}\n"),
+    ]);
+    let hits = w.search("how is the cache mounted read-only", None, 5);
+    assert_eq!(
+        hits[0].path,
+        "cache.sh",
+        "{:?}",
+        hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+    );
 }
 
 #[test]

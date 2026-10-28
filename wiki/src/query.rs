@@ -327,6 +327,8 @@ struct SymbolFields {
     doc_rest_words: Vec<String>,
     /// The word sets of multi-word item names (`name_words`, unfiltered).
     name_sets: BTreeSet<BTreeSet<String>>,
+    /// Whole item names, lowercased, the title's own name included.
+    defines: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -725,6 +727,7 @@ impl Wiki {
             .filter(|i| !i.test && !matches!(i.kind, CodeItemKind::Module | CodeItemKind::TopLevel))
         {
             let whole = item.name.to_lowercase();
+            f.defines.insert(whole.clone());
             if !title_words.contains(&whole.as_str()) {
                 f.whole.insert(whole);
             }
@@ -1125,6 +1128,20 @@ impl Wiki {
                 .collect();
         }
         let limit = limit.unwrap_or(10);
+        // Query words that are identifiers (`normalize_sku`, `formatPrice`;
+        // not `read-only`). `W_SYMBOL` is scaled by idf, which every caller's
+        // mention drives down, so a rare word beside a mere mention outscored
+        // the definer. A definer also earns `W_SYMBOL` scaled by how few
+        // pages define the name: large for one definer, near zero when every
+        // page does.
+        let idents: BTreeSet<String> = q
+            .split_whitespace()
+            .map(|w| w.split('(').next().unwrap_or(w))
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
+            .filter(|w| !w.contains('-') && Self::name_words(w).len() > 1)
+            .map(str::to_lowercase)
+            .collect();
+        let mut definers = vec![0usize; idents.len()];
 
         // Pass 1: facts per page, statistics over every filtered page.
         let mut n = 0usize;
@@ -1136,6 +1153,11 @@ impl Wiki {
                 continue;
             }
             let (len, candidate) = self.candidate(e, &tokens, &query_words, &dates, &mut df);
+            if let Some(f) = self.symbol_fields.get(&e.id) {
+                for (k, t) in idents.iter().enumerate() {
+                    definers[k] += usize::from(f.defines.contains(t));
+                }
+            }
             // Statistics count every filtered page, hits or not — `avglen`
             // over hits alone would change with the query.
             n += 1;
@@ -1152,21 +1174,10 @@ impl Wiki {
         // `avglen == 0` needs every filtered page's body to be missing on
         // disk; guard once here rather than divide by zero per page.
         let avglen = if avglen > 0.0 { avglen } else { 1.0 };
-        let idf: Vec<f64> = df
-            .iter()
-            .map(|&d| (1.0 + (n_f - d as f64 + 0.5) / (d as f64 + 0.5)).ln())
-            .collect();
-        // Query words that are identifiers (`normalize_sku`, `formatPrice`).
-        // A page defining one ranks first: `W_SYMBOL` is scaled by idf, and
-        // every caller mentioning the name drives its idf down, so a rare
-        // word beside a mere mention outscored the definer.
-        let idents: Vec<String> = q
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-            .filter(|w| Self::name_words(w).len() > 1)
-            .map(str::to_lowercase)
-            .collect();
-        let mut ranked: Vec<(Hit, usize, f64)> = candidates
+        let bm25_idf = |d: usize| (1.0 + (n_f - d as f64 + 0.5) / (d as f64 + 0.5)).ln();
+        let idf: Vec<f64> = df.iter().map(|&d| bm25_idf(d)).collect();
+        let definer_idf: Vec<f64> = definers.iter().map(|&d| bm25_idf(d)).collect();
+        let mut ranked: Vec<(Hit, f64)> = candidates
             .into_iter()
             .map(|c| {
                 let norm = c.len as f64 / avglen;
@@ -1180,25 +1191,29 @@ impl Wiki {
                             / (tf + Self::K1 * (1.0 - Self::B + Self::B * norm));
                         idf_t * (weight + Self::W_BODY * tf_norm)
                     })
-                    .sum();
+                    .sum::<f64>()
+                    + self.symbol_fields.get(&c.entry.id).map_or(0.0, |f| {
+                        idents
+                            .iter()
+                            .zip(&definer_idf)
+                            .filter(|(t, _)| f.defines.contains(*t))
+                            .map(|(_, idf_d)| Self::W_SYMBOL * idf_d)
+                            .sum()
+                    });
                 let total = if c.entry.memory && c.entry.superseded_by.is_none() {
                     base * MEMORY_BOOST
                 } else {
                     base
                 };
-                let defines = self.symbol_fields.get(&c.entry.id).map_or(0, |f| {
-                    idents.iter().filter(|t| f.whole.contains(*t)).count()
-                });
                 let hit = Hit::from_entry(c.entry, total, c.snippet);
-                (hit, defines, c.entry.pagerank)
+                (hit, c.entry.pagerank)
             })
             .collect();
         // Only live notes (not superseded) take the memory tie keys.
         let live = |h: &Hit| h.memory && h.superseded_by.is_none();
-        ranked.sort_by(|(a, a_def, a_pr), (b, b_def, b_pr)| {
-            b_def
-                .cmp(a_def)
-                .then_with(|| b.score.total_cmp(&a.score))
+        ranked.sort_by(|(a, a_pr), (b, b_pr)| {
+            b.score
+                .total_cmp(&a.score)
                 .then_with(|| live(b).cmp(&live(a)))
                 .then_with(|| {
                     if live(a) {
@@ -1211,7 +1226,7 @@ impl Wiki {
                 .then_with(|| a.id.cmp(&b.id))
         });
         ranked.truncate(limit);
-        let mut hits: Vec<Hit> = ranked.into_iter().map(|(hit, ..)| hit).collect();
+        let mut hits: Vec<Hit> = ranked.into_iter().map(|(hit, _)| hit).collect();
         self.expand(&mut hits, &tokens, &query_words, &idf[..tokens.len()]);
         hits
     }
