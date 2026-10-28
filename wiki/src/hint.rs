@@ -11,7 +11,7 @@ const HINT_PAGES: usize = 5;
 /// A page is kept when its score is at least this share of the best page's.
 const HINT_MIN_REL: f64 = 0.5;
 /// Longest line, in characters, before it is cut with `…`.
-const HINT_LINE_CHARS: usize = 160;
+const HINT_LINE_CHARS: usize = 240;
 /// Lines per page, so a fifth page still shows (on the bench the 8 lines
 /// ran out on three pages and the answer's file was the fifth).
 const HINT_PAGE_LINES: usize = 2;
@@ -23,9 +23,9 @@ const HINT_MEMORY_LONG: usize = 6;
 const HINT_MEMORY_SHORT: usize = 4;
 const HINT_MEMORY_RATIO: f64 = 2.0;
 
-const HEADER: &str = "Code locations from the project wiki (path:start-end  name  signature); read only these lines, and read them before you run grep:\n";
+const HEADER: &str = "Code locations from the project wiki (path:start-end  name  signature  — doc); read only these lines, and read them before you run grep:\n";
 
-/// Header plus up to `HINT_LINES` `path:start-end  name  signature` lines for
+/// Header plus up to `HINT_LINES` `path:start-end  name  signature  — doc` lines for
 /// `text`, then one `memory: path — summary` line for the best memory note
 /// whose title, alias or summary the text names with a long word or clearly
 /// outscores the code; empty when neither exists.
@@ -48,13 +48,15 @@ pub fn hint_lines(wiki: &Wiki, text: &str) -> String {
         .filter(|s| seen.insert((s.path.clone(), s.start_line, s.end_line)))
         .take(HINT_LINES);
     for s in symbols {
-        push_line(
-            &mut out,
-            &format!(
-                "{}:{}-{}  {}  {}",
-                s.path, s.start_line, s.end_line, s.name, s.signature
-            ),
+        let mut line = format!(
+            "{}:{}-{}  {}  {}",
+            s.path, s.start_line, s.end_line, s.name, s.signature
         );
+        // The doc tells a look-alike (a frozen legacy copy) from the target.
+        if let Some(d) = &s.doc {
+            line.push_str(&format!("  — {d}"));
+        }
+        push_line(&mut out, &line);
     }
     // Only a field match: a body match is too cheap in a note-heavy language.
     let note = wiki

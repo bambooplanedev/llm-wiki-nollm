@@ -69,6 +69,20 @@ fn hint_prints_symbol_lines_for_a_task() {
 }
 
 #[test]
+fn hint_lines_carry_the_symbol_doc() {
+    let tmp = project();
+    let out = hint_in(&tmp, TASK);
+    let line = out
+        .lines()
+        .find(|l| l.contains("load_tenant_creds"))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        line.ends_with(" — Load a tenant's exchange credentials for each venue."),
+        "{out}"
+    );
+}
+
+#[test]
 fn hint_ignores_docs_and_caps_lines() {
     let tmp = project();
     let chatty = "hey so I was wondering if you could maybe tell me where the tenant creds are \
