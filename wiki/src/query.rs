@@ -1156,7 +1156,17 @@ impl Wiki {
             .iter()
             .map(|&d| (1.0 + (n_f - d as f64 + 0.5) / (d as f64 + 0.5)).ln())
             .collect();
-        let mut ranked: Vec<(Hit, f64)> = candidates
+        // Query words that are identifiers (`normalize_sku`, `formatPrice`).
+        // A page defining one ranks first: `W_SYMBOL` is scaled by idf, and
+        // every caller mentioning the name drives its idf down, so a rare
+        // word beside a mere mention outscored the definer.
+        let idents: Vec<String> = q
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+            .filter(|w| Self::name_words(w).len() > 1)
+            .map(str::to_lowercase)
+            .collect();
+        let mut ranked: Vec<(Hit, usize, f64)> = candidates
             .into_iter()
             .map(|c| {
                 let norm = c.len as f64 / avglen;
@@ -1176,15 +1186,19 @@ impl Wiki {
                 } else {
                     base
                 };
+                let defines = self.symbol_fields.get(&c.entry.id).map_or(0, |f| {
+                    idents.iter().filter(|t| f.whole.contains(*t)).count()
+                });
                 let hit = Hit::from_entry(c.entry, total, c.snippet);
-                (hit, c.entry.pagerank)
+                (hit, defines, c.entry.pagerank)
             })
             .collect();
         // Only live notes (not superseded) take the memory tie keys.
         let live = |h: &Hit| h.memory && h.superseded_by.is_none();
-        ranked.sort_by(|(a, a_pr), (b, b_pr)| {
-            b.score
-                .total_cmp(&a.score)
+        ranked.sort_by(|(a, a_def, a_pr), (b, b_def, b_pr)| {
+            b_def
+                .cmp(a_def)
+                .then_with(|| b.score.total_cmp(&a.score))
                 .then_with(|| live(b).cmp(&live(a)))
                 .then_with(|| {
                     if live(a) {
@@ -1197,7 +1211,7 @@ impl Wiki {
                 .then_with(|| a.id.cmp(&b.id))
         });
         ranked.truncate(limit);
-        let mut hits: Vec<Hit> = ranked.into_iter().map(|(hit, _)| hit).collect();
+        let mut hits: Vec<Hit> = ranked.into_iter().map(|(hit, ..)| hit).collect();
         self.expand(&mut hits, &tokens, &query_words, &idf[..tokens.len()]);
         hits
     }

@@ -605,6 +605,34 @@ fn a_query_spelling_out_a_name_finds_its_definer() {
 }
 
 #[test]
+fn a_query_naming_an_identifier_ranks_its_definer_over_mentions() {
+    // Every caller mentions `normalize_sku`, so its idf is low; `legacy.py`
+    // also says `call` in a doc, a rare word that outweighed the definer.
+    let caller = |f: &str| {
+        format!("from .sku import normalize_sku\n\ndef {f}(x):\n    return normalize_sku(x)\n")
+    };
+    let (_d, w) = code_fixture(&[
+        (
+            "py/sku.py",
+            "def normalize_sku(raw):\n    \"\"\"Upper-case a SKU.\"\"\"\n    return raw.upper()\n",
+        ),
+        (
+            "py/legacy.py",
+            "def legacy_key(code):\n    \"\"\"Does NOT call normalize_sku (codes are raw).\"\"\"\n    return code\n",
+        ),
+        ("py/api.py", &caller("lookup_item")),
+        ("py/sync.py", &caller("merge_remote")),
+        ("py/import_csv.py", &caller("parse_row")),
+        ("py/report.py", "def summarize():\n    # normalize_sku is not needed here.\n    return 0\n"),
+        ("py/store.py", "def get_item(sku):\n    return sku\n"),
+        ("py/cart.py", "def total(items):\n    return 0\n"),
+    ]);
+    let hits = w.search("Which functions call normalize_sku directly?", None, 10);
+    let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+    assert_eq!(ids[0], "sku", "{ids:?}");
+}
+
+#[test]
 fn query_words_in_one_name_beat_words_spread_over_names() {
     // Both pages carry `order` and `reject` as name words; only `fsm.rs`
     // has them in one name.
