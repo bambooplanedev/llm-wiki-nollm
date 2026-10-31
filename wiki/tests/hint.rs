@@ -378,6 +378,41 @@ fn hint_names_a_page_with_no_matching_symbol() {
 }
 
 #[test]
+fn hint_names_a_script_by_a_word_form_of_its_name() {
+    let tmp = project_of(&[
+        (
+            "scripts/soak_provision.sh",
+            "#!/bin/sh
+# Arm a soak run.
+provision_arm() {
+  echo arm
+}
+provision_arm\n",
+        ),
+        (
+            "scripts/soak.sh",
+            "#!/bin/sh
+# Run the soak.
+soak_run() {
+  echo run
+}
+soak_run\n",
+        ),
+    ]);
+    // The real R2 prompt said "provisioning script"; the file is
+    // soak_provision.sh. No prefix joins the two forms, the stem does.
+    let out = hint_in(
+        &tmp,
+        "The provisioning script must refuse secrets on the command line",
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("scripts/soak_provision.sh")),
+        "{out}"
+    );
+}
+
+#[test]
 fn hint_memory_line_takes_the_newer_of_two_equal_notes() {
     let tmp = project_of(&[
         (
