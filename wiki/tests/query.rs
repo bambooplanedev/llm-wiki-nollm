@@ -837,6 +837,7 @@ fn search_lines_keeps_one_line_per_hit_and_symbol() {
             test: false,
             nested: false,
             also: None,
+            called_by: None,
         }],
     };
     let out = wiki::serve::search_lines(&[hit]);
@@ -2558,4 +2559,197 @@ fn a_nested_python_function_stays_out_of_the_hint() {
     let hint = wiki::hint::hint_lines(&w, "where is the rotation schedule step for keys");
     assert!(hint.contains("src/rotation.py:1-4"), "{hint}");
     assert!(!hint.contains("rotation_step"), "{hint}");
+}
+
+const GLOBALS_SH: &str = "\
+#!/usr/bin/env bash
+ZB_PY_DERIVE=\"$(cat <<'PY'
+import sys
+PY
+)\"
+
+_zb_py_run() {
+  python3 -c \"$ZB_PY_DERIVE\" \"$@\"
+}
+
+derive_python_step() {
+  _zb_py_run step
+}
+_zb_py_run go
+";
+
+#[test]
+fn a_shell_global_is_found_by_its_exact_name() {
+    let (_d, w) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    assert_eq!(
+        symbol_lines(&w.search("ZB_PY_DERIVE", None, 10)),
+        [("lib/zb.sh".to_string(), 2, 5, "ZB_PY_DERIVE".to_string())]
+    );
+    let mixed = symbol_lines(&w.search("_zb_py_run ZB_PY_DERIVE", None, 10));
+    assert_eq!(
+        mixed,
+        [
+            ("lib/zb.sh".to_string(), 7, 9, "_zb_py_run".to_string()),
+            ("lib/zb.sh".to_string(), 2, 5, "ZB_PY_DERIVE".to_string()),
+        ]
+    );
+    assert_eq!(
+        w.not_found("_zb_py_run ZB_PY_DERIVE", None, None),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_shell_global_leaves_word_queries_unchanged() {
+    // Lowercase `zb_py_derive=` is no item; the body reads the same.
+    let lower = GLOBALS_SH.replace("ZB_PY_DERIVE", "zb_py_derive");
+    let (_a, with) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    let (_b, without) = code_fixture(&[("lib/zb.sh", &lower)]);
+    assert!(with.items("zb").iter().any(|i| i.name == "ZB_PY_DERIVE"));
+    for q in ["derive python step", "py derive", "derive"] {
+        let show = |w: &Wiki| wiki::serve::search_lines(&w.search(q, None, 10));
+        assert_eq!(show(&with), show(&without), "{q}");
+    }
+}
+
+#[test]
+fn a_shell_global_stays_out_of_page_graph_and_hint() {
+    let (_d, w) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    let outline = w.outline("zb", None).unwrap();
+    assert!(!outline.contains("ZB_PY_DERIVE"), "{outline}");
+    assert!(w.callers("zb", "ZB_PY_DERIVE", None, None).is_err());
+    let callers = w.callers("zb", "_zb_py_run", None, None).unwrap();
+    assert!(!callers.contains("ZB_PY_DERIVE"), "{callers}");
+    let pack = w.neighbors("zb", 1, &PackBudget::default()).unwrap().text;
+    assert!(!pack.contains("ZB_PY_DERIVE"), "{pack}");
+    let hint = wiki::hint::hint_lines(&w, "where is the zb py derive script run");
+    assert!(!hint.contains("ZB_PY_DERIVE"), "{hint}");
+}
+
+#[test]
+fn a_shell_global_is_not_matched_in_another_case() {
+    let (_d, w) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    assert_eq!(w.not_found("zb_py_derive", None, None), ["zb_py_derive"]);
+    assert!(symbol_lines(&w.search("zb_py_derive _zb_py_run", None, 10))
+        .iter()
+        .all(|l| l.3 != "ZB_PY_DERIVE"));
+}
+
+const CALLED_RS: &str = "\
+pub const MAX_DEPTH: usize = 3;
+pub struct OrderBook;
+pub fn run_step() {}
+pub fn call_one() { run_step(); run_step(); let _ = OrderBook; let _ = MAX_DEPTH; }
+pub fn call_two() { run_step(); }
+pub fn lone_step() {}
+";
+
+/// The rendered line of the symbol `name` in `out`.
+fn line_of<'a>(out: &'a str, name: &str) -> &'a str {
+    let key = format!("  {name}  ");
+    out.lines()
+        .find(|l| l.contains(&key))
+        .unwrap_or_else(|| panic!("no line for {name}: {out}"))
+}
+
+#[test]
+fn a_name_query_notes_how_many_functions_call_a_function() {
+    let (_d, w) = code_fixture(&[("src/a.rs", CALLED_RS)]);
+    let out = wiki::serve::search_lines(&w.search("run_step", None, 10));
+    assert!(
+        line_of(&out, "run_step").ends_with("  [called by 2: `callers`]"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_function_nothing_calls_gets_no_note() {
+    let (_d, w) = code_fixture(&[("src/a.rs", CALLED_RS)]);
+    let out = wiki::serve::search_lines(&w.search("lone_step", None, 10));
+    assert!(out.contains("  lone_step  "), "{out}");
+    assert!(!out.contains("[called by"), "{out}");
+}
+
+#[test]
+fn values_types_globals_and_nested_defs_get_no_note() {
+    let (_a, rs) = code_fixture(&[("src/a.rs", CALLED_RS)]);
+    let (_b, sh) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    let (_c, py) = code_fixture(&[("src/runs.py", NESTED_PY)]);
+    for (w, q) in [
+        (&rs, "MAX_DEPTH"),
+        (&rs, "OrderBook"),
+        (&sh, "ZB_PY_DERIVE"),
+        (&py, "mk_run"),
+    ] {
+        let out = wiki::serve::search_lines(&w.search(q, None, 10));
+        assert!(out.contains(&format!("  {q}  ")), "{q}: {out}");
+        assert!(!out.contains("[called by"), "{q}: {out}");
+    }
+    // The shell function the global feeds is still noted; the script's top
+    // level counts, as `callers` lists it.
+    let out = wiki::serve::search_lines(&sh.search("_zb_py_run", None, 10));
+    assert!(
+        line_of(&out, "_zb_py_run").ends_with("  [called by 2: `callers`]"),
+        "{out}"
+    );
+}
+
+#[test]
+fn word_and_mixed_queries_get_no_note() {
+    let (_d, w) = code_fixture(&[("src/a.rs", CALLED_RS)]);
+    for q in ["run step", "run_step step", "where is run_step called"] {
+        let out = wiki::serve::search_lines(&w.search(q, None, 10));
+        assert!(out.contains("  run_step  "), "{q}: {out}");
+        assert!(!out.contains("[called by"), "{q}: {out}");
+    }
+}
+
+/// `N` of a `callers` answer one level up: `callers of … — N functions`.
+fn callers_count(w: &Wiki, id: &str, name: &str) -> usize {
+    let out = w.callers(id, name, Some(1), None).unwrap();
+    let head = out.lines().next().unwrap();
+    let n = head.split(" — ").nth(1).unwrap().split(' ').next().unwrap();
+    n.parse().unwrap()
+}
+
+#[test]
+fn the_note_counts_what_callers_lists_twin_included() {
+    let (_a, rs) = code_fixture(&[("src/a.rs", CALLED_RS)]);
+    let (_b, cpp) = code_fixture(&[
+        ("src/step.h", "void run_step();\n"),
+        (
+            "src/step.cpp",
+            "#include \"step.h\"\nvoid run_step() { run_step(); }\n",
+        ),
+        (
+            "src/use.cpp",
+            "#include \"step.h\"\nvoid call_one() { run_step(); run_step(); }\nvoid call_two() { run_step(); }\n",
+        ),
+    ]);
+    for w in [&rs, &cpp] {
+        let hits = w.search("run_step", None, 10);
+        let mut seen = 0;
+        for h in &hits {
+            for s in h.symbols.iter().filter(|s| s.name == "run_step") {
+                assert_eq!(
+                    s.called_by,
+                    Some(callers_count(w, &h.id, "run_step")),
+                    "{}",
+                    h.id
+                );
+                assert_eq!(s.called_by, Some(2), "{}", h.id);
+                seen += 1;
+            }
+        }
+        assert!(seen > 0);
+    }
+    // Declaration and definition both answer.
+    let hits = cpp.search("run_step", None, 10);
+    assert_eq!(
+        hits.iter()
+            .flat_map(|h| &h.symbols)
+            .filter(|s| s.name == "run_step")
+            .count(),
+        2
+    );
 }
