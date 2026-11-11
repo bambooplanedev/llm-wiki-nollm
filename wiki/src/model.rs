@@ -305,6 +305,10 @@ pub struct CodeItem {
     /// C++ only: which side of project-wide pairing this item may take.
     #[serde(skip)]
     pub pair_role: PairRole,
+    /// C++ only: the innermost named, non-inline namespace around the
+    /// item, its last segment (`hft::strategy` gives `strategy`).
+    #[serde(skip)]
+    pub namespace: Option<String>,
 }
 
 /// C++ only: which side of project-wide pairing an item may take.
