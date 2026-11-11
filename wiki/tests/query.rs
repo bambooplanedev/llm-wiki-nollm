@@ -2524,3 +2524,68 @@ fn a_nested_python_function_stays_out_of_the_hint() {
     assert!(hint.contains("src/rotation.py:1-4"), "{hint}");
     assert!(!hint.contains("rotation_step"), "{hint}");
 }
+
+const GLOBALS_SH: &str = "\
+#!/usr/bin/env bash
+ZB_PY_DERIVE=\"$(cat <<'PY'
+import sys
+PY
+)\"
+
+_zb_py_run() {
+  python3 -c \"$ZB_PY_DERIVE\" \"$@\"
+}
+
+derive_python_step() {
+  _zb_py_run step
+}
+_zb_py_run go
+";
+
+#[test]
+fn a_shell_global_is_found_by_its_exact_name() {
+    let (_d, w) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    assert_eq!(
+        symbol_lines(&w.search("ZB_PY_DERIVE", None, 10)),
+        [("lib/zb.sh".to_string(), 2, 5, "ZB_PY_DERIVE".to_string())]
+    );
+    let mixed = symbol_lines(&w.search("_zb_py_run ZB_PY_DERIVE", None, 10));
+    assert_eq!(
+        mixed,
+        [
+            ("lib/zb.sh".to_string(), 7, 9, "_zb_py_run".to_string()),
+            ("lib/zb.sh".to_string(), 2, 5, "ZB_PY_DERIVE".to_string()),
+        ]
+    );
+    assert_eq!(
+        w.not_found("_zb_py_run ZB_PY_DERIVE", None, None),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_shell_global_leaves_word_queries_unchanged() {
+    // Lowercase `zb_py_derive=` is no item; the body reads the same.
+    let lower = GLOBALS_SH.replace("ZB_PY_DERIVE", "zb_py_derive");
+    let (_a, with) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    let (_b, without) = code_fixture(&[("lib/zb.sh", &lower)]);
+    assert!(with.items("zb").iter().any(|i| i.name == "ZB_PY_DERIVE"));
+    for q in ["derive python step", "py derive", "derive"] {
+        let show = |w: &Wiki| wiki::serve::search_lines(&w.search(q, None, 10));
+        assert_eq!(show(&with), show(&without), "{q}");
+    }
+}
+
+#[test]
+fn a_shell_global_stays_out_of_page_graph_and_hint() {
+    let (_d, w) = code_fixture(&[("lib/zb.sh", GLOBALS_SH)]);
+    let outline = w.outline("zb", None).unwrap();
+    assert!(!outline.contains("ZB_PY_DERIVE"), "{outline}");
+    assert!(w.callers("zb", "ZB_PY_DERIVE", None, None).is_err());
+    let callers = w.callers("zb", "_zb_py_run", None, None).unwrap();
+    assert!(!callers.contains("ZB_PY_DERIVE"), "{callers}");
+    let pack = w.neighbors("zb", 1, &PackBudget::default()).unwrap().text;
+    assert!(!pack.contains("ZB_PY_DERIVE"), "{pack}");
+    let hint = wiki::hint::hint_lines(&w, "where is the zb py derive script run");
+    assert!(!hint.contains("ZB_PY_DERIVE"), "{hint}");
+}
