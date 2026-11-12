@@ -438,3 +438,81 @@ fn the_fallback_is_named_first_in_lines() {
         format!("{}\np.md\n  1-1  11.4 The ZB time line\n", fb.unwrap())
     );
 }
+const READING: &str = "# Plan\n## Global constraints\n**Cited code pins**\n## Review Focus\n## Rows\n## Per-pair procedure (every pair)\n**Pins**\n**The committed anchor is never written**\n## Task T4: SIZE-REV2-DEV (lead J-C)\n**T4a. Check.**\n## Task T9: hand-off pairs\n**T9a. End bound of an unclosed run.**\n**T9k. The booked window ends.**\n**RF2, the widened window (T9a).**\n## 7. Tasks\n## 11.7 Refusal order\n## 1. Intent\n## 2. Goals\n## Critic round (2026-11-11), record\n## Git.\n";
+#[test]
+fn several_labels_in_one_query_answer_in_query_order() {
+    let (t, fb) = fallback_in(READING, "Global constraints Per-pair procedure Pins");
+    assert_eq!(
+        t,
+        [
+            "Global constraints",
+            "Per-pair procedure (every pair)",
+            "Pins"
+        ]
+    );
+    assert_eq!(
+        fb.as_deref(),
+        Some("no label holds the words in a row; labels each part of the query opens, in query order:")
+    );
+    let (t, _) = fallback_in(READING, "T9a T9k Review Focus Rows Task T9 Critic round");
+    assert_eq!(
+        t,
+        [
+            "T9a. End bound of an unclosed run.",
+            "T9k. The booked window ends.",
+            "Review Focus",
+            "Rows",
+            "Task T9: hand-off pairs",
+            "Critic round (2026-11-11), record"
+        ]
+    );
+    // an ID may be a label's second word; a part with a longer label is one part
+    let (t, _) = fallback_in(READING, "T4 Rows");
+    assert_eq!(t, ["Task T4: SIZE-REV2-DEV (lead J-C)", "Rows"]);
+}
+#[test]
+fn words_naming_no_label_are_listed_first() {
+    let (t, fb) = fallback_in(READING, "T9i-1 T9a Global constraints Critic round record");
+    assert_eq!(
+        t,
+        [
+            "T9a. End bound of an unclosed run.",
+            "Global constraints",
+            "Critic round (2026-11-11), record"
+        ]
+    );
+    assert!(fb
+        .unwrap()
+        .ends_with("in query order (no label opens with T9i-1, record):"));
+}
+#[test]
+fn bare_numbers_and_common_words_name_no_part() {
+    // a bare number is not an ID: these keep the leading-ID fallback alone
+    let (t, fb) = fallback_in(READING, "11.7 step 7");
+    assert_eq!(t, ["11.7 Refusal order"]);
+    assert!(fb.unwrap().contains("leading ID 11.7"));
+    assert_eq!(fallback_in(READING, "items 1, 2"), (vec![], None));
+    // one plain word must be a whole label, so `the` opens no part
+    let (t, fb) = fallback_in(READING, "T4a the window");
+    assert_eq!(t, ["T4a. Check."]);
+    assert!(fb.unwrap().contains("leading ID T4a"));
+    // the same label named again is not a second part
+    assert_eq!(
+        fallback_in(READING, "git log main git branch git status"),
+        (vec![], None)
+    );
+}
+#[test]
+fn single_label_answers_do_not_change() {
+    assert_eq!(
+        fallback_in(READING, "Global constraints"),
+        (vec!["Global constraints".to_string()], None)
+    );
+    assert_eq!(
+        fallback_in(READING, "T9a").0,
+        [
+            "T9a. End bound of an unclosed run.",
+            "RF2, the widened window (T9a)."
+        ]
+    );
+}
