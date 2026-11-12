@@ -2475,6 +2475,60 @@ fn a_query_of_names_gets_one_line_per_name() {
     assert_eq!(w.not_found(q, None, None), ["test_eh"]);
 }
 
+/// Paths of the pages of a response, in output order.
+fn hit_paths(hits: &[wiki::query::Hit]) -> Vec<String> {
+    hits.iter().map(|h| h.path.clone()).collect()
+}
+
+#[test]
+fn a_name_that_is_a_file_stem_keeps_that_file() {
+    // `auto_rearm` names no item but the module file; an any-case constant
+    // elsewhere must not push the file out of the answer.
+    let (_d, w) = code_fixture(&[
+        (
+            "src/ingress/auto_rearm.rs",
+            "pub fn run_watcher() {}\npub fn run_watcher_loop() {}\n",
+        ),
+        ("scripts/arm_knobs.py", "AUTO_REARM = 1\n"),
+        ("src/manager/risk.rs", "pub fn fan_out_kill_switch() {}\n"),
+    ]);
+    let q = "auto_rearm fan_out_kill_switch";
+    assert_eq!(
+        hit_paths(&w.search(q, None, 5)),
+        [
+            "src/ingress/auto_rearm.rs",
+            "scripts/arm_knobs.py",
+            "src/manager/risk.rs"
+        ]
+    );
+    assert_eq!(w.not_found(q, None, None), Vec::<String>::new());
+}
+
+#[test]
+fn a_name_that_is_only_a_file_stem_is_not_missing() {
+    let (_d, w) = code_fixture(&[
+        ("scripts/campaign_state.py", "def init():\n    pass\n"),
+        ("scripts/soak.py", "def campaign():\n    pass\n"),
+    ]);
+    assert_eq!(
+        w.not_found("campaign_state", None, None),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        hit_paths(&w.search("campaign_state", None, 5)),
+        ["scripts/campaign_state.py"]
+    );
+    // A directory module is known by its folder's name.
+    let (_d, w) = code_fixture(&[
+        ("src/slot_risk/mod.rs", "pub fn reseed() {}\n"),
+        ("src/spawn.rs", "pub fn reseed_worker_shm() {}\n"),
+    ]);
+    assert_eq!(
+        hit_paths(&w.search("slot_risk reseed_worker_shm", None, 5)),
+        ["src/slot_risk/mod.rs", "src/spawn.rs"]
+    );
+}
+
 #[test]
 fn a_word_query_reports_nothing_missing() {
     let (_d, w) = code_fixture(&[("scripts/test_campaign_state.py", CAMPAIGN)]);
