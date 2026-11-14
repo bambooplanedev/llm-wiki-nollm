@@ -23,7 +23,7 @@ This directory contains the tooling to turn a compiled wiki directory into a loc
 Build a static site (output in `.quartz-build/public/`):
 
 ```bash
-scripts/quartz-publish.sh /path/to/rss-feed-wiki --title "RSS Feed"
+scripts/quartz-publish.sh /path/to/project-wiki --title "My Project"
 ```
 
 The built site will be in `.quartz-build/public/`. Open `public/index.html` in a browser to view it.
@@ -33,7 +33,7 @@ The built site will be in `.quartz-build/public/`. Open `public/index.html` in a
 Serve a live preview with hot-reloading at `http://localhost:8080`:
 
 ```bash
-scripts/quartz-publish.sh /path/to/rss-feed-wiki --serve
+scripts/quartz-publish.sh /path/to/project-wiki --serve
 ```
 
 Press Ctrl-C to stop the server.
